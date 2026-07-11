@@ -1,4 +1,4 @@
-import AdvancedSMSDashboard from '@/components/advanced-sms-dashboard';
+import SMSMonitorDashboard from '@/components/sms-monitor-dashboard';
 
 export const metadata = {
   title: 'SMS Monitor Dashboard',
@@ -6,5 +6,5 @@ export const metadata = {
 };
 
 export default function DashboardPage() {
-  return <AdvancedSMSDashboard />;
+  return <SMSMonitorDashboard />;
 }
