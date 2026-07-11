@@ -28,3 +28,6 @@ next-env.d.ts
 
 # watcher state (VPS only — do not commit)
 known_clis.json
+
+# lock files — VPS uses npm
+pnpm-lock.yaml
