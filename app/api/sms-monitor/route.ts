@@ -1,8 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-const BASE_URL = process.env.BASE_URL || '';
-const TOKEN = process.env.TOKEN || '';
+// ── Credentials from env (set in .env.local or VPS environment) ──
+const BASE_URL    = (process.env.VIEWSTATS_URL || process.env.BASE_URL || '').replace(/\/$/, '');
+const API_TOKEN   = process.env.API_TOKEN || process.env.TOKEN || '';
+const FETCH_RECORDS = 200;
 
+// Exact same headers as Python bot
+const FETCH_HEADERS: Record<string, string> = {
+  'Accept': '*/*',
+  'Accept-Language': 'en,en-US;q=0.9,ur;q=0.8',
+  'Connection': 'keep-alive',
+  'DNT': '1',
+  'User-Agent': 'Mozilla/5.0',
+  'Referer': `${BASE_URL}/crapi/lamix/viewstats?token=${API_TOKEN}&records=${FETCH_RECORDS}`,
+};
+
+// All endpoints to try (same list as Python bot config)
 const ENDPOINTS = [
   '/crapi/lamix/viewstats',
   '/crapi/lamix/stats',
@@ -16,7 +29,54 @@ const ENDPOINTS = [
   '/crapi/lamix/info',
 ];
 
-interface SMSData {
+// Country prefix map — same as Python bot
+const PREFIX_TO_COUNTRY: Record<string, string> = {
+  '60': 'Malaysia', '62': 'Indonesia', '91': 'India', '92': 'Pakistan',
+  '93': 'Afghanistan', '1': 'USA/Canada', '44': 'United Kingdom',
+  '33': 'France', '49': 'Germany', '216': 'Tunisia', '222': 'Mauritania',
+  '254': 'Kenya', '234': 'Nigeria', '20': 'Egypt', '27': 'South Africa',
+  '55': 'Brazil', '52': 'Mexico', '7': 'Russia/Kazakhstan', '86': 'China',
+  '970': 'Palestine', '63': 'Philippines', '880': 'Bangladesh',
+  '84': 'Vietnam', '90': 'Turkey', '66': 'Thailand', '57': 'Colombia',
+  '54': 'Argentina', '51': 'Peru', '56': 'Chile', '966': 'Saudi Arabia',
+  '971': 'UAE', '974': 'Qatar', '965': 'Kuwait', '968': 'Oman',
+  '962': 'Jordan', '961': 'Lebanon', '212': 'Morocco', '213': 'Algeria',
+  '964': 'Iraq', '967': 'Yemen', '963': 'Syria', '218': 'Libya',
+  '249': 'Sudan', '251': 'Ethiopia', '252': 'Somalia', '233': 'Ghana',
+  '256': 'Uganda', '255': 'Tanzania', '258': 'Mozambique', '244': 'Angola',
+  '242': 'Congo', '237': 'Cameroon', '225': 'Ivory Coast', '221': 'Senegal',
+  '223': 'Mali', '226': 'Burkina Faso', '227': 'Niger', '235': 'Chad',
+  '224': 'Guinea', '250': 'Rwanda', '257': 'Burundi', '260': 'Zambia',
+  '265': 'Malawi', '263': 'Zimbabwe', '267': 'Botswana', '264': 'Namibia',
+  '211': 'South Sudan', '232': 'Sierra Leone', '231': 'Liberia',
+  '228': 'Togo', '229': 'Benin', '241': 'Gabon', '240': 'Equatorial Guinea',
+  '236': 'Central African Republic', '253': 'Djibouti', '291': 'Eritrea',
+  '248': 'Seychelles', '230': 'Mauritius', '269': 'Comoros',
+  '261': 'Madagascar', '268': 'Eswatini', '266': 'Lesotho',
+  '220': 'Gambia', '245': 'Guinea Bissau', '238': 'Cape Verde',
+  '239': 'Sao Tome', '82': 'South Korea', '81': 'Japan', '39': 'Italy',
+  '34': 'Spain', '31': 'Netherlands', '32': 'Belgium', '46': 'Sweden',
+  '47': 'Norway', '45': 'Denmark', '358': 'Finland', '48': 'Poland',
+  '43': 'Austria', '41': 'Switzerland', '351': 'Portugal', '30': 'Greece',
+  '420': 'Czech Republic', '36': 'Hungary', '40': 'Romania',
+  '359': 'Bulgaria', '421': 'Slovakia', '386': 'Slovenia',
+  '385': 'Croatia', '381': 'Serbia', '380': 'Ukraine', '375': 'Belarus',
+  '998': 'Uzbekistan', '994': 'Azerbaijan', '995': 'Georgia',
+  '374': 'Armenia', '976': 'Mongolia', '977': 'Nepal', '94': 'Sri Lanka',
+  '95': 'Myanmar', '855': 'Cambodia', '856': 'Laos', '65': 'Singapore',
+  '852': 'Hong Kong', '886': 'Taiwan', '61': 'Australia', '64': 'New Zealand',
+};
+
+function getCountryName(fullNumber: string): string {
+  const digits = fullNumber.replace(/\D/g, '');
+  for (const prefix of Object.keys(PREFIX_TO_COUNTRY).sort((a, b) => b.length - a.length)) {
+    if (digits.startsWith(prefix)) return PREFIX_TO_COUNTRY[prefix];
+  }
+  return `Unknown (+${digits.slice(0, 3)})`;
+}
+
+export interface SMSRecord {
+  id: string;
   time: string;
   range: string;
   number: string;
@@ -27,156 +87,101 @@ interface SMSData {
   content: string;
 }
 
-async function tryEndpoints(): Promise<any> {
-  if (!BASE_URL || !TOKEN) {
-    console.warn('[SMS Monitor] Missing BASE_URL or TOKEN');
-    return null;
-  }
+export interface NewCLIRecord {
+  cli: string;
+  firstDetected: string;
+  count: number;
+  todayCount: number;
+}
+
+// ── Try every endpoint, return first successful response ──
+async function fetchFromAPI(): Promise<{ records: any[]; endpoint: string } | null> {
+  if (!BASE_URL || !API_TOKEN) return null;
 
   for (const endpoint of ENDPOINTS) {
     try {
-      const url = `${BASE_URL}${endpoint}?token=${TOKEN}&records=200`;
-      console.log(`[SMS Monitor] Trying endpoint: ${endpoint}`);
-
+      const url = `${BASE_URL}${endpoint}?token=${API_TOKEN}&records=${FETCH_RECORDS}`;
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 10000);
+      const timer = setTimeout(() => controller.abort(), 12000);
 
-      const response = await fetch(url, {
-        method: 'GET',
-        headers: {
-          'Accept': 'application/json',
-          'User-Agent': 'Mozilla/5.0',
-          'Connection': 'keep-alive',
-        },
-        signal: controller.signal,
-      });
+      const res = await fetch(url, { headers: FETCH_HEADERS, signal: controller.signal });
+      clearTimeout(timer);
 
-      clearTimeout(timeout);
+      if (!res.ok) continue;
 
-      if (response.ok) {
-        const data = await response.json();
-        console.log(`[SMS Monitor] Success with endpoint: ${endpoint}`);
-        return { data, endpoint };
+      const json = await res.json();
+
+      // Python bot checks: data.status === 'success' → data.data
+      let records: any[] = [];
+      if (json?.status === 'success' && Array.isArray(json?.data)) {
+        records = json.data;
+      } else if (Array.isArray(json)) {
+        records = json;
+      } else if (Array.isArray(json?.records)) {
+        records = json.records;
+      } else if (Array.isArray(json?.data)) {
+        records = json.data;
       }
-    } catch (error) {
-      console.log(`[SMS Monitor] Endpoint ${endpoint} failed:`, error instanceof Error ? error.message : 'Unknown error');
+
+      if (records.length > 0) {
+        return { records, endpoint };
+      }
+    } catch {
       continue;
     }
   }
   return null;
 }
 
-function transformData(data: any, endpoint: string = ''): { sms: SMSData[]; newCLIs: any[] } {
-  if (!data) {
-    return { sms: [], newCLIs: [] };
-  }
-
-  let records: any[] = [];
-
-  // Parse different response formats based on endpoint
-  if (Array.isArray(data)) {
-    records = data;
-  } else if (data.records) {
-    records = data.records;
-  } else if (data.data) {
-    records = Array.isArray(data.data) ? data.data : [data.data];
-  } else if (data.sms) {
-    records = Array.isArray(data.sms) ? data.sms : [data.sms];
-  } else if (data.messages) {
-    records = Array.isArray(data.messages) ? data.messages : [data.messages];
-  }
-
-  const smsData: SMSData[] = records
-    .filter((record: any) => record) // Filter out null/undefined
-    .map((record: any) => ({
-      time: record.time || record.timestamp || record.date || new Date().toISOString(),
-      range: record.range || record.country || record.country_code || 'Unknown',
-      number: String(record.number || record.phone || record.msisdn || ''),
-      myPayout: String(parseFloat(String(record.myPayout || record.my_payout || record.payout || 0)).toFixed(4)),
-      agentPayout: String(parseFloat(String(record.agentPayout || record.agent_payout || record.agent_revenue || 0)).toFixed(4)),
-      client: record.client || record.sender || record.route_name || 'Unknown',
-      cli: record.cli || record.route || record.sender_id || 'Unknown',
-      content: String(record.content || record.message || record.text || record.body || ''),
-    }));
-
-  // Detect new CLIs
-  const newCLIs = detectNewCLIs(smsData);
-
-  return { sms: smsData, newCLIs };
+// ── Map raw API record → SMSRecord (using Python bot field names: dt, cli, num, message, payout) ──
+function mapRecord(rec: any): SMSRecord {
+  const rawNum = String(rec.num || rec.number || rec.phone || rec.msisdn || '');
+  return {
+    id: String(rec.id || rec.uid || `${rec.dt || Date.now()}-${rawNum}`),
+    time: rec.dt || rec.time || rec.timestamp || '',
+    range: rec.range || rec.country || getCountryName(rawNum),
+    number: rawNum,
+    myPayout: `€${parseFloat(String(rec.payout || rec.myPayout || rec.my_payout || 0)).toFixed(4)}`,
+    agentPayout: `€${parseFloat(String(rec.agent_payout || rec.agentPayout || 0)).toFixed(4)}`,
+    client: rec.client || rec.sender || rec.username || '—',
+    cli: rec.cli || rec.route || rec.sender_id || '—',
+    content: String(rec.message || rec.content || rec.text || rec.body || ''),
+  };
 }
 
-function detectNewCLIs(smsData: SMSData[]): any[] {
-  const cliMap = new Map<string, { count: number; firstTime: string }>();
+// ── Detect CLIs and track per-session "new" ones ──
+function buildCLIStats(records: SMSRecord[]): NewCLIRecord[] {
+  const map = new Map<string, NewCLIRecord>();
+  const todayStr = new Date().toISOString().slice(0, 10);
 
-  smsData.forEach((sms) => {
-    if (!cliMap.has(sms.cli)) {
-      cliMap.set(sms.cli, { count: 1, firstTime: sms.time });
-    } else {
-      const cli = cliMap.get(sms.cli)!;
-      cli.count++;
+  for (const rec of records) {
+    const cli = rec.cli;
+    if (!map.has(cli)) {
+      map.set(cli, { cli, firstDetected: rec.time, count: 0, todayCount: 0 });
     }
-  });
+    const entry = map.get(cli)!;
+    entry.count++;
+    if (rec.time.startsWith(todayStr)) entry.todayCount++;
+  }
 
-  return Array.from(cliMap.entries()).map(([cli, data]) => ({
-    cli,
-    firstDetected: data.firstTime,
-    count: data.count,
-  }));
+  return Array.from(map.values()).sort((a, b) => b.count - a.count);
 }
 
+export async function GET(_req: NextRequest) {
+  const result = await fetchFromAPI();
 
-
-export async function GET(request: NextRequest) {
-  try {
-    const result = await tryEndpoints();
-    
-    if (!result) {
-      return NextResponse.json(
-        {
-          success: false,
-          sms: [],
-          newCLIs: [],
-          error: 'No endpoint responded successfully',
-        },
-        {
-          status: 200,
-          headers: {
-            'Cache-Control': 'no-store, max-age=0',
-          },
-        }
-      );
-    }
-
-    const { sms, newCLIs } = transformData(result.data, result.endpoint);
-
+  if (!result) {
     return NextResponse.json(
-      {
-        success: true,
-        sms,
-        newCLIs,
-        endpoint: result.endpoint,
-      },
-      {
-        headers: {
-          'Cache-Control': 'no-store, max-age=0',
-        },
-      }
-    );
-  } catch (error) {
-    console.error('[SMS Monitor] Error:', error);
-    return NextResponse.json(
-      {
-        success: false,
-        sms: [],
-        newCLIs: [],
-        error: error instanceof Error ? error.message : 'Unknown error',
-      },
-      {
-        status: 200,
-        headers: {
-          'Cache-Control': 'no-store, max-age=0',
-        },
-      }
+      { success: false, sms: [], cliStats: [], error: 'No data — check BASE_URL / TOKEN in .env.local' },
+      { headers: { 'Cache-Control': 'no-store' } }
     );
   }
+
+  const sms      = result.records.map(mapRecord);
+  const cliStats = buildCLIStats(sms);
+
+  return NextResponse.json(
+    { success: true, sms, cliStats, endpoint: result.endpoint, total: sms.length },
+    { headers: { 'Cache-Control': 'no-store' } }
+  );
 }

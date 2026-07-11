@@ -1,57 +1,45 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
+// Supports both server-env tokens AND client-supplied tokens (from UI settings panel)
+async function sendTelegramMessage(botToken: string, chatId: string, text: string) {
+  const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      chat_id: chatId,
+      text,
+      parse_mode: 'HTML',
+      disable_web_page_preview: true,
+    }),
+  });
+  return res.json();
+}
 
 export async function POST(request: NextRequest) {
   try {
-    if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
-      console.log('[Telegram] Missing credentials');
-      return NextResponse.json(
-        { message: 'Telegram not configured' },
-        { status: 200 }
-      );
+    const body = await request.json();
+
+    // Accept bot token/chat_id from request body (UI panel) OR env vars
+    const botToken = body.botToken || process.env.BOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN || '';
+    const chatId   = body.chatId   || process.env.CHANNEL_ID || process.env.TELEGRAM_CHAT_ID || '';
+    const text     = body.text || '';
+
+    if (!botToken || !chatId) {
+      return NextResponse.json({ success: false, error: 'Missing botToken or chatId' });
     }
-
-    const { text } = await request.json();
-
     if (!text) {
-      return NextResponse.json(
-        { error: 'Missing text' },
-        { status: 400 }
-      );
+      return NextResponse.json({ success: false, error: 'Missing text' });
     }
 
-    const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
+    const result = await sendTelegramMessage(botToken, chatId, text);
 
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        chat_id: TELEGRAM_CHAT_ID,
-        text: text,
-        parse_mode: 'HTML',
-      }),
-    });
-
-    if (response.ok) {
-      console.log('[Telegram] Message sent successfully');
+    if (result.ok) {
       return NextResponse.json({ success: true });
     } else {
-      const error = await response.text();
-      console.error('[Telegram] Error:', error);
-      return NextResponse.json(
-        { error: 'Failed to send message' },
-        { status: 200 }
-      );
+      return NextResponse.json({ success: false, error: result.description });
     }
-  } catch (error) {
-    console.error('[Telegram] Exception:', error);
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Unknown error' },
-      { status: 200 }
-    );
+  } catch (err) {
+    return NextResponse.json({ success: false, error: String(err) });
   }
 }
