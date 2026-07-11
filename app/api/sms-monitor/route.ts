@@ -199,9 +199,14 @@ export async function GET(_req: NextRequest) {
     );
   }
 
-  // HARD CAP — slice BEFORE mapping to guarantee max 200 rows no matter what API returns
-  const capped   = result.records.slice(0, MAX_RECORDS);
-  const rawSms   = capped.map(mapRecord);
+  // Sort newest first, then HARD CAP — max 200 rows no matter what API returns
+  const sorted = [...result.records].sort((a: any, b: any) => {
+    const tA = a.dt || a.time || '';
+    const tB = b.dt || b.time || '';
+    return tB.localeCompare(tA);
+  });
+  const capped = sorted.slice(0, MAX_RECORDS);
+  const rawSms = capped.map(mapRecord);
   const { cliStats, newCLIs } = buildCLIStats(rawSms);
 
   return NextResponse.json(

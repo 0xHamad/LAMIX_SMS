@@ -112,8 +112,9 @@ export default function SMSMonitorDashboard() {
 
       setConnected(true);
       setEndpoint(data.endpoint || '');
-      // Hard cap — max 200 rows in browser to prevent hang
-      setSmsData((data.sms || []).slice(0, 200));
+      // Always replace (never append) — keep newest 200 only
+      const incoming: SMSRecord[] = data.sms || [];
+      setSmsData(incoming.slice(0, 200));
       setCliStats(data.cliStats || []);
 
       // Server already detects new CLIs — merge them into alert list
