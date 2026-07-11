@@ -199,12 +199,21 @@ export async function GET(_req: NextRequest) {
     );
   }
 
-  // Enforce hard cap of 500 records
-  const rawSms = result.records.slice(0, MAX_RECORDS).map(mapRecord);
+  // HARD CAP — slice BEFORE mapping to guarantee max 200 rows no matter what API returns
+  const capped   = result.records.slice(0, MAX_RECORDS);
+  const rawSms   = capped.map(mapRecord);
   const { cliStats, newCLIs } = buildCLIStats(rawSms);
 
   return NextResponse.json(
-    { success: true, sms: rawSms, cliStats, newCLIs, endpoint: result.endpoint, total: rawSms.length },
+    {
+      success: true,
+      sms: rawSms,
+      cliStats,
+      newCLIs,
+      endpoint:  result.endpoint,
+      total:     rawSms.length,          // will always be ≤ 200
+      apiTotal:  result.records.length,  // how many the API actually returned (debug)
+    },
     { headers: { 'Cache-Control': 'no-store' } }
   );
 }
