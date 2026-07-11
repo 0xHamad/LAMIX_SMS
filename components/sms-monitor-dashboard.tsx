@@ -74,8 +74,10 @@ export default function SMSMonitorDashboard() {
   const [copiedId, setCopiedId]     = useState<string | null>(null);
   const [newCLIAlert, setNewCLIAlert] = useState<CLIStat[]>([]);
 
-  const firstPollRef   = useRef(true);
-  const pollRef        = useRef<ReturnType<typeof setInterval> | null>(null);
+  const firstPollRef = useRef(true);
+  const pollRef      = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Keep tgCfg in a ref so fetchData never needs to re-create when config changes
+  const tgCfgRef     = useRef<TelegramCfg>({ botToken: '', chatId: '' });
 
   // Load Telegram config from localStorage once
   useEffect(() => {
@@ -84,24 +86,29 @@ export default function SMSMonitorDashboard() {
       if (stored) {
         const cfg = JSON.parse(stored) as TelegramCfg;
         setTgCfg(cfg);
+        tgCfgRef.current = cfg;
         setTgSaved(!!(cfg.botToken && cfg.chatId));
       }
     } catch {}
   }, []);
 
-  // ── Send Telegram notification ─────────────────────────────────────────────
+  // Keep ref in sync whenever state changes
+  useEffect(() => { tgCfgRef.current = tgCfg; }, [tgCfg]);
+
+  // ── Send Telegram notification (reads from ref — stable, no deps) ──────────
   const sendTelegram = useCallback(async (text: string) => {
-    if (!tgCfg.botToken || !tgCfg.chatId) return;
+    const cfg = tgCfgRef.current;
+    if (!cfg.botToken || !cfg.chatId) return;
     try {
       await fetch('/api/telegram-notify', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ botToken: tgCfg.botToken, chatId: tgCfg.chatId, text }),
+        body: JSON.stringify({ botToken: cfg.botToken, chatId: cfg.chatId, text }),
       });
     } catch {}
-  }, [tgCfg]);
+  }, []); // no deps — stable forever
 
-  // ── Polling ────────────────────────────────────────────────────────────────
+  // ── Polling — stable, no deps that change ─────────────────────────────────
   const fetchData = useCallback(async () => {
     try {
       const res = await fetch(`/api/sms-monitor?t=${Date.now()}`);
@@ -112,12 +119,13 @@ export default function SMSMonitorDashboard() {
 
       setConnected(true);
       setEndpoint(data.endpoint || '');
-      // Always replace (never append) — keep newest 200 only
+
+      // REPLACE state every poll — never append, hard cap 200
       const incoming: SMSRecord[] = data.sms || [];
       setSmsData(incoming.slice(0, 200));
       setCliStats(data.cliStats || []);
 
-      // Server already detects new CLIs — merge them into alert list
+      // New CLIs from server-side tracker
       const serverNew: CLIStat[] = data.newCLIs || [];
       if (serverNew.length > 0) {
         setNewCLIAlert(prev => {
@@ -125,7 +133,6 @@ export default function SMSMonitorDashboard() {
           const toAdd = serverNew.filter((n: CLIStat) => !existing.has(n.cli));
           return toAdd.length ? [...toAdd, ...prev] : prev;
         });
-        // Also send via Telegram (browser-side path using saved UI config)
         if (!firstPollRef.current) {
           for (const nc of serverNew) {
             sendTelegram(formatTelegramNewCLI(nc.cli, nc.firstDetected, nc.count));
@@ -139,8 +146,9 @@ export default function SMSMonitorDashboard() {
     } finally {
       setLoading(false);
     }
-  }, [sendTelegram]);
+  }, [sendTelegram]); // sendTelegram is stable — fetchData never recreates
 
+  // Start poll once — never restarts because fetchData is stable
   useEffect(() => {
     fetchData();
     pollRef.current = setInterval(fetchData, 2500);
