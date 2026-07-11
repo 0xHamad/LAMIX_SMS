@@ -206,7 +206,7 @@ export default function SMSMonitorDashboard() {
       s.client.toLowerCase().includes(q) ||
       s.content.toLowerCase().includes(q)
     );
-  });
+  }).slice(0, 200); // absolute render cap — never more than 200 rows in DOM
 
   // Summary stats
   const totalPayout = smsData.reduce((sum, s) => sum + parseFloat(s.myPayout.replace('€', '') || '0'), 0);
@@ -458,7 +458,7 @@ export default function SMSMonitorDashboard() {
                   ) : (
                     filtered.map((sms, idx) => (
                       <tr
-                        key={sms.id || idx}
+                        key={`row-${idx}`}
                         className="border-b border-white/4 hover:bg-white/3 transition-colors group"
                       >
                         <td className="px-4 py-2.5 text-white/40 whitespace-nowrap text-xs">{sms.time}</td>
