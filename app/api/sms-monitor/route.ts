@@ -1,14 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-const BASE_URL = process.env.BASE_URL || 'http://51.77.216.195';
+const BASE_URL = process.env.BASE_URL || '';
 const TOKEN = process.env.TOKEN || '';
 
 const ENDPOINTS = [
   '/crapi/lamix/viewstats',
   '/crapi/lamix/stats',
+  '/crapi/lamix/user',
+  '/crapi/lamix/numbers',
+  '/crapi/lamix/ranges',
+  '/crapi/lamix/balance',
   '/crapi/lamix/dashboard',
   '/crapi/lamix/sms',
   '/crapi/lamix/reports',
+  '/crapi/lamix/info',
 ];
 
 interface SMSData {
@@ -23,45 +28,76 @@ interface SMSData {
 }
 
 async function tryEndpoints(): Promise<any> {
+  if (!BASE_URL || !TOKEN) {
+    console.warn('[SMS Monitor] Missing BASE_URL or TOKEN');
+    return null;
+  }
+
   for (const endpoint of ENDPOINTS) {
     try {
-      const url = `${BASE_URL}${endpoint}?token=${TOKEN}&records=100`;
-      
+      const url = `${BASE_URL}${endpoint}?token=${TOKEN}&records=200`;
+      console.log(`[SMS Monitor] Trying endpoint: ${endpoint}`);
+
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 10000);
+
       const response = await fetch(url, {
         method: 'GET',
         headers: {
           'Accept': 'application/json',
           'User-Agent': 'Mozilla/5.0',
+          'Connection': 'keep-alive',
         },
+        signal: controller.signal,
       });
+
+      clearTimeout(timeout);
 
       if (response.ok) {
         const data = await response.json();
-        return data;
+        console.log(`[SMS Monitor] Success with endpoint: ${endpoint}`);
+        return { data, endpoint };
       }
     } catch (error) {
+      console.log(`[SMS Monitor] Endpoint ${endpoint} failed:`, error instanceof Error ? error.message : 'Unknown error');
       continue;
     }
   }
   return null;
 }
 
-function transformData(data: any): { sms: SMSData[]; newCLIs: any[] } {
+function transformData(data: any, endpoint: string = ''): { sms: SMSData[]; newCLIs: any[] } {
   if (!data) {
-    return { sms: getMockSMSData(), newCLIs: getMockNewCLIs() };
+    return { sms: [], newCLIs: [] };
   }
 
-  const records = data.records || data.data || data.sms || [];
-  const smsData: SMSData[] = records.map((record: any) => ({
-    time: record.time || record.timestamp || new Date().toISOString(),
-    range: record.range || record.country || 'Unknown',
-    number: record.number || record.phone || '',
-    myPayout: parseFloat(record.myPayout || record.my_payout || 0).toFixed(4),
-    agentPayout: parseFloat(record.agentPayout || record.agent_payout || 0).toFixed(4),
-    client: record.client || record.sender || 'Unknown',
-    cli: record.cli || record.route || 'Unknown',
-    content: record.content || record.message || '',
-  }));
+  let records: any[] = [];
+
+  // Parse different response formats based on endpoint
+  if (Array.isArray(data)) {
+    records = data;
+  } else if (data.records) {
+    records = data.records;
+  } else if (data.data) {
+    records = Array.isArray(data.data) ? data.data : [data.data];
+  } else if (data.sms) {
+    records = Array.isArray(data.sms) ? data.sms : [data.sms];
+  } else if (data.messages) {
+    records = Array.isArray(data.messages) ? data.messages : [data.messages];
+  }
+
+  const smsData: SMSData[] = records
+    .filter((record: any) => record) // Filter out null/undefined
+    .map((record: any) => ({
+      time: record.time || record.timestamp || record.date || new Date().toISOString(),
+      range: record.range || record.country || record.country_code || 'Unknown',
+      number: String(record.number || record.phone || record.msisdn || ''),
+      myPayout: String(parseFloat(String(record.myPayout || record.my_payout || record.payout || 0)).toFixed(4)),
+      agentPayout: String(parseFloat(String(record.agentPayout || record.agent_payout || record.agent_revenue || 0)).toFixed(4)),
+      client: record.client || record.sender || record.route_name || 'Unknown',
+      cli: record.cli || record.route || record.sender_id || 'Unknown',
+      content: String(record.content || record.message || record.text || record.body || ''),
+    }));
 
   // Detect new CLIs
   const newCLIs = detectNewCLIs(smsData);
@@ -88,72 +124,59 @@ function detectNewCLIs(smsData: SMSData[]): any[] {
   }));
 }
 
-function getMockSMSData(): SMSData[] {
-  return [
-    {
-      time: '2026-07-11 14:19:20',
-      range: 'Tanzania LX 05Mar',
-      number: '255671215334',
-      myPayout: '0.0150',
-      agentPayout: '0.0140',
-      client: 'AHM_Adi',
-      cli: 'Bolt',
-      content: '# To access your Bolt account use code 9719 Never share this code ID WdpiXhlekmh',
-    },
-    {
-      time: '2026-07-11 14:19:00',
-      range: 'Myanmar LX 26Jun',
-      number: '959545386073',
-      myPayout: '0.0150',
-      agentPayout: '0.0140',
-      client: 'AHM_Shahab',
-      cli: 'AUTHMSG',
-      content: 'Your MBiO verification code is 970592',
-    },
-    {
-      time: '2026-07-11 14:17:03',
-      range: 'Tanzania LX 24Mar',
-      number: '255772679102',
-      myPayout: '0.0000',
-      agentPayout: '0.0000',
-      client: 'AHM_Hassan',
-      cli: 'AUTHMSG',
-      content: 'Your Outlier verification code is 431409 Dont share this code with anyone; our employees will never ask for it',
-    },
-  ];
-}
 
-function getMockNewCLIs(): any[] {
-  return [
-    {
-      cli: 'Bolt',
-      firstDetected: '2026-07-11 14:19:20',
-      count: 5,
-    },
-    {
-      cli: 'AUTHMSG',
-      firstDetected: '2026-07-11 14:17:03',
-      count: 3,
-    },
-  ];
-}
 
 export async function GET(request: NextRequest) {
   try {
-    const data = await tryEndpoints();
-    const { sms, newCLIs } = transformData(data);
+    const result = await tryEndpoints();
+    
+    if (!result) {
+      return NextResponse.json(
+        {
+          success: false,
+          sms: [],
+          newCLIs: [],
+          error: 'No endpoint responded successfully',
+        },
+        {
+          status: 200,
+          headers: {
+            'Cache-Control': 'no-store, max-age=0',
+          },
+        }
+      );
+    }
 
-    return NextResponse.json({
-      success: true,
-      sms,
-      newCLIs,
-    });
+    const { sms, newCLIs } = transformData(result.data, result.endpoint);
+
+    return NextResponse.json(
+      {
+        success: true,
+        sms,
+        newCLIs,
+        endpoint: result.endpoint,
+      },
+      {
+        headers: {
+          'Cache-Control': 'no-store, max-age=0',
+        },
+      }
+    );
   } catch (error) {
     console.error('[SMS Monitor] Error:', error);
-    return NextResponse.json({
-      success: false,
-      sms: getMockSMSData(),
-      newCLIs: getMockNewCLIs(),
-    });
+    return NextResponse.json(
+      {
+        success: false,
+        sms: [],
+        newCLIs: [],
+        error: error instanceof Error ? error.message : 'Unknown error',
+      },
+      {
+        status: 200,
+        headers: {
+          'Cache-Control': 'no-store, max-age=0',
+        },
+      }
+    );
   }
 }

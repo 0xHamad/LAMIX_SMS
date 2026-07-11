@@ -46,29 +46,32 @@ export default function SMSMonitorDashboard() {
     }
   }, []);
 
-  // Fetch SMS data
+  // Fetch SMS data continuously
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const response = await fetch('/api/sms-monitor');
+        const response = await fetch('/api/sms-monitor?t=' + Date.now());
         if (response.ok) {
           const data = await response.json();
           setSmsData(data.sms || []);
           setNewCLIs(data.newCLIs || []);
-          setConnected(true);
+          setConnected(data.success !== false);
         } else {
           setConnected(false);
         }
       } catch (error) {
-        console.error('Error fetching SMS data:', error);
+        console.error('[SMS Monitor] Fetch error:', error);
         setConnected(false);
       } finally {
         setLoading(false);
       }
     };
 
+    // First fetch immediately
     fetchData();
-    const interval = setInterval(fetchData, 3000);
+    
+    // Then fetch every 2 seconds continuously
+    const interval = setInterval(fetchData, 2000);
     return () => clearInterval(interval);
   }, []);
 
@@ -252,8 +255,12 @@ export default function SMSMonitorDashboard() {
                         {sms.cli}
                       </span>
                     </td>
-                    <td className="px-4 py-3 text-sm text-slate-400 max-w-xs truncate hover:text-slate-300 transition-colors" title={sms.content}>
-                      {sms.content}
+                    <td className="px-4 py-3 text-sm text-slate-300">
+                      <div className="max-w-2xl overflow-hidden">
+                        <p className="whitespace-pre-wrap break-words text-xs leading-relaxed">
+                          {sms.content}
+                        </p>
+                      </div>
                     </td>
                   </tr>
                 ))
