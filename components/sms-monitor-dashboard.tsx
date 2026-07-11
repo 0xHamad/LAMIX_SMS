@@ -493,7 +493,6 @@ export default function SMSMonitorDashboard() {
               <span>
                 {filtered.length} records
                 {searchTerm && ` (filtered from ${smsData.length})`}
-                {smsData.length >= 500 && <span className="ml-2 text-orange-400/60">— max 500 shown</span>}
               </span>
               {endpoint && <span>via <code className="text-white/40">{endpoint}</code></span>}
             </div>
