@@ -74,8 +74,6 @@ export default function SMSMonitorDashboard() {
   const [copiedId, setCopiedId]     = useState<string | null>(null);
   const [newCLIAlert, setNewCLIAlert] = useState<CLIStat[]>([]);
 
-  // Track CLIs seen in previous poll to detect NEW ones
-  const knownCLIsRef   = useRef<Set<string>>(new Set());
   const firstPollRef   = useRef(true);
   const pollRef        = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -114,29 +112,26 @@ export default function SMSMonitorDashboard() {
 
       setConnected(true);
       setEndpoint(data.endpoint || '');
-      setSmsData(data.sms || []);
+      // Enforce 500 cap on client side as well (server already caps but safety net)
+      setSmsData((data.sms || []).slice(0, 500));
       setCliStats(data.cliStats || []);
 
-      // Detect brand-new CLIs (not seen in previous polls)
-      if (!firstPollRef.current) {
-        const brandNew: CLIStat[] = (data.cliStats || []).filter(
-          (c: CLIStat) => !knownCLIsRef.current.has(c.cli)
-        );
-        if (brandNew.length > 0) {
-          setNewCLIAlert(prev => {
-            const existing = new Set(prev.map(p => p.cli));
-            const toAdd = brandNew.filter(n => !existing.has(n.cli));
-            return toAdd.length ? [...toAdd, ...prev] : prev;
-          });
-          // Send Telegram notification for each new CLI
-          for (const nc of brandNew) {
+      // Server already detects new CLIs — merge them into alert list
+      const serverNew: CLIStat[] = data.newCLIs || [];
+      if (serverNew.length > 0) {
+        setNewCLIAlert(prev => {
+          const existing = new Set(prev.map((p: CLIStat) => p.cli));
+          const toAdd = serverNew.filter((n: CLIStat) => !existing.has(n.cli));
+          return toAdd.length ? [...toAdd, ...prev] : prev;
+        });
+        // Also send via Telegram (browser-side path using saved UI config)
+        if (!firstPollRef.current) {
+          for (const nc of serverNew) {
             sendTelegram(formatTelegramNewCLI(nc.cli, nc.firstDetected, nc.count));
           }
         }
       }
 
-      // Update known CLIs set
-      (data.cliStats || []).forEach((c: CLIStat) => knownCLIsRef.current.add(c.cli));
       firstPollRef.current = false;
     } catch {
       setConnected(false);
@@ -495,7 +490,11 @@ export default function SMSMonitorDashboard() {
 
             {/* Table footer */}
             <div className="px-4 py-2 border-t border-white/5 flex items-center justify-between text-xs text-white/25">
-              <span>{filtered.length} records {searchTerm && `(filtered from ${smsData.length})`}</span>
+              <span>
+                {filtered.length} records
+                {searchTerm && ` (filtered from ${smsData.length})`}
+                {smsData.length >= 500 && <span className="ml-2 text-orange-400/60">— max 500 shown</span>}
+              </span>
               {endpoint && <span>via <code className="text-white/40">{endpoint}</code></span>}
             </div>
           </div>

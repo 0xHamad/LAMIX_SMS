@@ -1,9 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 // ── Credentials from env (set in .env.local or VPS environment) ──
-const BASE_URL    = (process.env.VIEWSTATS_URL || process.env.BASE_URL || '').replace(/\/$/, '');
-const API_TOKEN   = process.env.API_TOKEN || process.env.TOKEN || '';
-const FETCH_RECORDS = 200;
+const BASE_URL      = (process.env.VIEWSTATS_URL || process.env.BASE_URL || '').replace(/\/$/, '');
+const API_TOKEN     = process.env.API_TOKEN || process.env.TOKEN || '';
+const FETCH_RECORDS = 500;   // fetch up to 500 from API
+const MAX_RECORDS   = 500;   // hard cap shown on dashboard
+
+// ── Server-side persistent CLI registry (survives between requests on same process) ──
+const SERVER_KNOWN_CLIS = new Set<string>();
+let   SERVER_INIT_DONE  = false;
 
 // Exact same headers as Python bot
 const FETCH_HEADERS: Record<string, string> = {
@@ -149,8 +154,8 @@ function mapRecord(rec: any): SMSRecord {
   };
 }
 
-// ── Detect CLIs and track per-session "new" ones ──
-function buildCLIStats(records: SMSRecord[]): NewCLIRecord[] {
+// ── Build CLI stats and detect brand-new CLIs (server-side persistent tracking) ──
+function buildCLIStats(records: SMSRecord[]): { cliStats: NewCLIRecord[]; newCLIs: NewCLIRecord[] } {
   const map = new Map<string, NewCLIRecord>();
   const todayStr = new Date().toISOString().slice(0, 10);
 
@@ -164,7 +169,24 @@ function buildCLIStats(records: SMSRecord[]): NewCLIRecord[] {
     if (rec.time.startsWith(todayStr)) entry.todayCount++;
   }
 
-  return Array.from(map.values()).sort((a, b) => b.count - a.count);
+  const cliStats = Array.from(map.values()).sort((a, b) => b.count - a.count);
+
+  // On very first request, populate known CLIs without marking them "new"
+  const newCLIs: NewCLIRecord[] = [];
+  if (!SERVER_INIT_DONE) {
+    cliStats.forEach(c => SERVER_KNOWN_CLIS.add(c.cli));
+    SERVER_INIT_DONE = true;
+  } else {
+    // Any CLI not in the known set is genuinely new
+    for (const c of cliStats) {
+      if (!SERVER_KNOWN_CLIS.has(c.cli)) {
+        newCLIs.push(c);
+        SERVER_KNOWN_CLIS.add(c.cli);
+      }
+    }
+  }
+
+  return { cliStats, newCLIs };
 }
 
 export async function GET(_req: NextRequest) {
@@ -172,16 +194,17 @@ export async function GET(_req: NextRequest) {
 
   if (!result) {
     return NextResponse.json(
-      { success: false, sms: [], cliStats: [], error: 'No data — check BASE_URL / TOKEN in .env.local' },
+      { success: false, sms: [], cliStats: [], newCLIs: [], error: 'No data — check BASE_URL / TOKEN in .env.local' },
       { headers: { 'Cache-Control': 'no-store' } }
     );
   }
 
-  const sms      = result.records.map(mapRecord);
-  const cliStats = buildCLIStats(sms);
+  // Enforce hard cap of 500 records
+  const rawSms = result.records.slice(0, MAX_RECORDS).map(mapRecord);
+  const { cliStats, newCLIs } = buildCLIStats(rawSms);
 
   return NextResponse.json(
-    { success: true, sms, cliStats, endpoint: result.endpoint, total: sms.length },
+    { success: true, sms: rawSms, cliStats, newCLIs, endpoint: result.endpoint, total: rawSms.length },
     { headers: { 'Cache-Control': 'no-store' } }
   );
 }
