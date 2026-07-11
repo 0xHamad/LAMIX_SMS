@@ -3,8 +3,8 @@ import { NextRequest, NextResponse } from 'next/server';
 // ── Credentials from env (set in .env.local or VPS environment) ──
 const BASE_URL      = (process.env.VIEWSTATS_URL || process.env.BASE_URL || '').replace(/\/$/, '');
 const API_TOKEN     = process.env.API_TOKEN || process.env.TOKEN || '';
-const FETCH_RECORDS = 500;   // fetch up to 500 from API
-const MAX_RECORDS   = 500;   // hard cap shown on dashboard
+const FETCH_RECORDS = 200;   // fetch up to 200 from API
+const MAX_RECORDS   = 200;   // hard cap shown on dashboard
 
 // ── Server-side persistent CLI registry (survives between requests on same process) ──
 const SERVER_KNOWN_CLIS = new Set<string>();

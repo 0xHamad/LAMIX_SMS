@@ -112,8 +112,8 @@ export default function SMSMonitorDashboard() {
 
       setConnected(true);
       setEndpoint(data.endpoint || '');
-      // Enforce 500 cap on client side as well (server already caps but safety net)
-      setSmsData((data.sms || []).slice(0, 500));
+      // Hard cap — max 200 rows in browser to prevent hang
+      setSmsData((data.sms || []).slice(0, 200));
       setCliStats(data.cliStats || []);
 
       // Server already detects new CLIs — merge them into alert list
